@@ -14,6 +14,8 @@ from processing.transcribe import WhisperTranscriber
 from processing.diarize import SpeakerDiarizer
 from processing.merge import SegmentMerger
 from utils.markdown import MarkdownExporter
+from utils.summarize import MeetingSummarizer
+from utils.anytype import AnytypePublisher
 
 # Configure logging
 logging.basicConfig(
@@ -32,6 +34,8 @@ class MeetingScribe:
       3) Diarize speakers
       4) Merge segments
       5) Export Markdown & JSON
+      6) Summarize with Claude (optional)
+      7) Publish to Anytype (optional)
     """
 
     def __init__(
@@ -40,18 +44,24 @@ class MeetingScribe:
         output_folder: str = "results/",
         language: str = None,
         whisper_model: str = "base",
+        summarize: bool = False,
+        publish_anytype: bool = False,
     ):
         """
         Args:
           video_path    – path to input video file (.mp4/.mkv/.mov)
           output_folder – where transcript.json and .md will be created
           language      – ISO-639-1 code to force ASR language (None=auto)
-          whisper_model – one of ["tiny","base","small","medium","large-v3"]
+          whisper_model      – one of ["tiny","base","small","medium","large-v3"]
+          summarize          – generate meeting notes via Claude
+          publish_anytype    – publish notes to Anytype
         """
         self.video_path = video_path
         self.output_folder = output_folder
         self.language = language
         self.whisper_model = whisper_model
+        self.summarize = summarize
+        self.publish_anytype = publish_anytype
         self.logger = logging.getLogger(__name__)
         
         # Ensure output folder ends with a slash for path consistency
@@ -65,13 +75,14 @@ class MeetingScribe:
         self.audio_path = os.path.join(self.output_folder, "audio.wav")
         self.transcript_json = os.path.join(self.output_folder, "transcript.json")
         self.transcript_md = os.path.join(self.output_folder, "transcript.md")
+        self.summary_md = os.path.join(self.output_folder, "meeting_notes.md")
         
         # Validate video path
         if not os.path.isfile(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
             
         # Validate model name
-        valid_models = ["tiny", "base", "small", "medium", "large-v3"]
+        valid_models = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
         if whisper_model not in valid_models:
             raise ValueError(f"Invalid model: {whisper_model}. Must be one of {valid_models}")
 
@@ -82,6 +93,7 @@ class MeetingScribe:
         """
         self.logger.info(f"Starting MeetingScribe pipeline for {self.video_path}")
         self.logger.info(f"Output folder: {self.output_folder}")
+        self.logger.info("Using MLX (Apple Silicon GPU acceleration)")
         
         try:
             # Step 1: Extract audio from video
@@ -98,9 +110,20 @@ class MeetingScribe:
             
             # Step 5: Export results to Markdown and JSON
             self._export(merged)
-            
+
+            # Step 6: Summarize with Claude (optional)
+            notes = None
+            if self.summarize:
+                notes = self._summarize()
+
+            # Step 7: Publish to Anytype (optional)
+            if self.publish_anytype:
+                self._publish_anytype(notes)
+
             self.logger.info("✓ Pipeline completed successfully")
             self.logger.info(f"📄 Results saved to {self.transcript_md} and {self.transcript_json}")
+            if notes:
+                self.logger.info(f"📝 Meeting notes saved to {self.summary_md}")
         except Exception as e:
             self.logger.error(f"Pipeline failed: {str(e)}")
             raise
@@ -258,6 +281,59 @@ class MeetingScribe:
             self.logger.error(f"Export failed: {str(e)}")
             raise RuntimeError(f"Export failed: {str(e)}")
 
+    def _summarize(self) -> str:
+        """
+        Read the exported Markdown transcript and generate meeting notes
+        via Claude (Sonnet 4.6).
+
+        Returns:
+          The generated meeting notes as a Markdown string.
+        """
+        self.logger.info("Step 6: Generating meeting notes with Claude")
+
+        try:
+            with open(self.transcript_md, "r", encoding="utf-8") as f:
+                transcript_text = f.read()
+
+            summarizer = MeetingSummarizer()
+            notes = summarizer.summarize(transcript_text)
+
+            with open(self.summary_md, "w", encoding="utf-8") as f:
+                f.write(notes)
+
+            self.logger.info(f"Meeting notes saved to {self.summary_md}")
+            return notes
+        except Exception as e:
+            self.logger.error(f"Summarization failed: {str(e)}")
+            raise RuntimeError(f"Summarization failed: {str(e)}")
+
+    def _publish_anytype(self, notes: Optional[str] = None) -> None:
+        """
+        Publish the meeting notes (or raw transcript) to Anytype.
+
+        Args:
+          notes – summary generated by _summarize(); falls back to
+                  the raw Markdown transcript if None.
+        """
+        self.logger.info("Step 7: Publishing to Anytype")
+
+        try:
+            # Use summary if available, otherwise the raw transcript
+            if notes is None:
+                with open(self.transcript_md, "r", encoding="utf-8") as f:
+                    notes = f.read()
+
+            video_name = os.path.splitext(os.path.basename(self.video_path))[0]
+            title = f"Meeting Notes — {video_name}"
+
+            publisher = AnytypePublisher()
+            object_id = publisher.publish(title, notes)
+
+            self.logger.info(f"Published to Anytype (object: {object_id})")
+        except Exception as e:
+            self.logger.error(f"Anytype publish failed: {str(e)}")
+            raise RuntimeError(f"Anytype publish failed: {str(e)}")
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
@@ -286,7 +362,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         default="base",
-        choices=["tiny", "base", "small", "medium", "large-v3"],
+        choices=["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"],
         help="Whisper model size"
     )
     
@@ -295,7 +371,19 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable verbose logging"
     )
-    
+
+    parser.add_argument(
+        "--summarize",
+        action="store_true",
+        help="Generate meeting notes using Claude (requires ANTHROPIC_API_KEY)"
+    )
+
+    parser.add_argument(
+        "--anytype",
+        action="store_true",
+        help="Publish notes to Anytype (requires ANYTYPE_KEY)"
+    )
+
     return parser.parse_args()
 
 
@@ -312,7 +400,9 @@ def main() -> int:
             video_path=args.video_path,
             output_folder=args.output,
             language=args.lang,
-            whisper_model=args.model
+            whisper_model=args.model,
+            summarize=args.summarize,
+            publish_anytype=args.anytype,
         )
         
         scribe.run()

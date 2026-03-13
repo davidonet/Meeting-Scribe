@@ -14,9 +14,7 @@ torch>=2.0.0                       # PyTorch base package
 torchaudio>=2.0.0                  # PyTorch audio functionality
 
 # ASR (Automatic Speech Recognition)
-#--extra-index-url https://download.pytorch.org/whl/cu118
-#git+https://github.com/openai/whisper.git@248b6cb124225dd263bb9bd32d060b6517e067f8  # Use specific commit to avoid install issues
-tokenizers>=0.13.0                 # Used by Whisper for tokenization
+mlx-whisper>=0.4.0                 # MLX-based Whisper (native Apple Silicon GPU acceleration)
 
 # Audio analysis and speaker diarization
 librosa>=0.10.0                    # Audio analysis tools
@@ -33,12 +31,12 @@ tqdm>=4.65.0                       # Progress bars
 click>=8.1.3                       # CLI utilities
 rich>=13.3.5                       # Rich text and formatting in terminal
 python-dotenv>=1.0.0               # Environment variable loading
+requests>=2.31.0                   # HTTP client (Anytype API)
+anthropic>=0.40.0                  # Anthropic Claude SDK (meeting summary)
 
 # Optional: for GPU acceleration (comment out if not using CUDA)
 # torch>=2.0.0+cu118               # Replace the CPU torch with this for CUDA 11.8
 # torchaudio>=2.0.0+cu118          # Make sure CUDA version matches torch
-
--e ./whisper_src      # install your patched Whisper in editable mode
 
 # Note: pyannote.audio dependencies have been replaced with scikit-learn for
 # custom speaker diarization implementation. This eliminates the need for
