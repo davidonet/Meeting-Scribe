@@ -12,7 +12,7 @@
 | Automatic speaker diarization (custom MFCC+clustering) | ✅ | Distinguishes *who* spoke |
 | Markdown export with timestamps | ✅ | Saves to `results/transcript.md` |
 | One-command CLI (`python main.py <video>`) | ✅ | Creates a `results/` folder |
-| Meeting notes generation via Claude | ✅ | `--summarize` flag, requires `ANTHROPIC_API_KEY` |
+| Meeting notes generation (local MLX or Claude) | ✅ | `--summarize` flag; local by default, `--backend claude` requires `ANTHROPIC_API_KEY` |
 | Publish notes to Anytype | ✅ | `--anytype` flag, requires `ANYTYPE_KEY` |
 | Key-frame extraction for slide changes (LMSKE) | ⏳ | Planned v0.2 |
 
@@ -56,17 +56,18 @@ results/
 ## Usage
 
 ```bash
-python main.py [-h] [--output OUTPUT] [--lang LANG] [--model MODEL] [--verbose] [--summarize] [--anytype] VIDEO_PATH
+python main.py [-h] [--output OUTPUT] [--lang LANG] [--model MODEL] [--verbose] [--summarize] [--backend {mlx,claude}] [--anytype] VIDEO_PATH
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `VIDEO_PATH` | *(required)* | Path to input video (`.mp4`, `.mkv`, `.mov`) |
+| `VIDEO_PATH` | *(required)* | Path to input video or audio (`.mp4`, `.mkv`, `.mov`, `.m4a`, …) |
 | `--output`, `-o` | `results/` | Output folder for transcript files |
-| `--lang` | auto-detect | ISO-639-1 language code (e.g. `en`, `es`) |
+| `--lang` | auto-detect | ISO-639-1 language code (e.g. `en`, `fr`, `es`) |
 | `--model` | `base` | Whisper model size (see table below) |
 | `--verbose`, `-v` | off | Enable debug logging |
-| `--summarize` | off | Generate meeting notes via Claude (requires `ANTHROPIC_API_KEY`) |
+| `--summarize` | off | Generate meeting notes (local MLX model by default) |
+| `--backend` | `mlx` | Summarization backend: `mlx` (local, Apple Silicon) or `claude` (Anthropic API, requires `ANTHROPIC_API_KEY`) |
 | `--anytype` | off | Publish notes to Anytype (requires `ANYTYPE_KEY`) |
 
 ### Whisper Models
@@ -87,8 +88,11 @@ python main.py [-h] [--output OUTPUT] [--lang LANG] [--model MODEL] [--verbose] 
 # Spanish audio, medium model
 python main.py reunión.mp4 --lang es --model medium
 
-# Generate meeting notes with Claude
+# Generate meeting notes locally (Apple Silicon, no API key needed)
 python main.py meeting.mp4 --summarize
+
+# Generate meeting notes with Claude API
+python main.py meeting.mp4 --summarize --backend claude
 
 # Full pipeline: transcribe + summarize + publish to Anytype
 python main.py meeting.mp4 --summarize --anytype
@@ -131,7 +135,7 @@ Meeting-Scribe/
 | **ASR** | [OpenAI Whisper](https://github.com/openai/whisper) | State-of-the-art, MIT license, offline |
 | **Diarization** | Custom MFCC + agglomerative clustering | No cloud/HuggingFace dependencies |
 | **Media** | [`ffmpeg`](https://ffmpeg.org/) | Battle-tested extraction |
-| **Summarization** | Claude (claude-sonnet-4-6) | High-quality meeting notes |
+| **Summarization** | [mlx-lm](https://github.com/ml-explore/mlx-examples) / Claude (claude-sonnet-4-6) | Local (Apple Silicon) or API-based meeting notes |
 | **Publishing** | [Anytype](https://anytype.io/) | Local-first note management |
 
 ---

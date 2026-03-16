@@ -1,8 +1,5 @@
 #!/bin/sh
 
 source .venv/bin/activate
-#!/bin/sh
-
-source .venv/bin/activate
-python ~/src/Meeting-Scribe/main.py --model large-v3-turbo --lang fr --summarize --anytype "$1"
+python ~/dev/Meeting-Scribe/main.py "$1" --model large-v3-turbo --lang fr --summarize --backend mlx
 deactivate

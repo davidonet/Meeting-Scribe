@@ -1,24 +1,25 @@
 # utils/summarize.py
 # ───────────────────────────────────────────────────────────────────
-# Generates meeting notes from a transcript using Claude (Anthropic API).
+# Generates meeting notes from a transcript using either:
+#   - A local model via mlx-lm (default, no API key needed)
+#   - Claude via the Anthropic API (--backend claude)
 
-import os
 import logging
 from pathlib import Path
 from typing import Optional
 
-try:
-    import anthropic
-except ImportError:
-    anthropic = None
-
 
 class MeetingSummarizer:
     """
-    Calls Claude to produce structured meeting notes from a raw transcript.
+    Produces structured meeting notes from a raw transcript.
+
+    Supports two backends:
+      - "mlx"    : local inference via mlx-lm (Apple Silicon, default)
+      - "claude" : Anthropic API (requires ANTHROPIC_API_KEY)
     """
 
-    DEFAULT_MODEL = "claude-sonnet-4-6"
+    DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-14B-Instruct-4bit"
+    DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
     SYSTEM_PROMPT = (
         "You are a professional meeting-notes assistant.\n"
@@ -35,32 +36,70 @@ class MeetingSummarizer:
 
     def __init__(
         self,
+        backend: str = "mlx",
+        model: Optional[str] = None,
         api_key: Optional[str] = None,
-        model: str = DEFAULT_MODEL,
+        max_tokens: int = 4096,
     ):
         """
         Args:
-          api_key – Anthropic API key (falls back to ANTHROPIC_API_KEY env var)
-          model   – Claude model identifier
+          backend    – "mlx" for local inference, "claude" for Anthropic API
+          model      – model identifier (defaults per backend if None)
+          api_key    – Anthropic API key (only needed for "claude" backend)
+          max_tokens – maximum tokens to generate
         """
-        if anthropic is None:
+        self.backend = backend
+        self.max_tokens = max_tokens
+        self.logger = logging.getLogger(__name__)
+
+        # Load context.md (domain knowledge for the system prompt)
+        context_path = Path(__file__).parent / "context.md"
+        self._context = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
+
+        if backend == "mlx":
+            self._init_mlx(model)
+        elif backend == "claude":
+            self._init_claude(model, api_key)
+        else:
+            raise ValueError(f"Unknown backend: {backend!r}. Use 'mlx' or 'claude'.")
+
+    # ── Backend initialisation ────────────────────────────────────
+
+    def _init_mlx(self, model: Optional[str]) -> None:
+        try:
+            from mlx_lm import load, generate
+        except ImportError:
             raise ImportError(
-                "The 'anthropic' package is required for summarization. "
+                "mlx-lm is required for local summarization. "
+                "Install it with: pip install mlx-lm"
+            )
+
+        self.model_name = model or self.DEFAULT_MLX_MODEL
+        self.logger.info(f"Loading local model: {self.model_name}")
+        self._mlx_model, self._mlx_tokenizer = load(self.model_name)
+        self._mlx_generate = generate
+        self.logger.info("Local model loaded successfully")
+
+    def _init_claude(self, model: Optional[str], api_key: Optional[str]) -> None:
+        import os
+
+        try:
+            import anthropic
+        except ImportError:
+            raise ImportError(
+                "The 'anthropic' package is required for the Claude backend. "
                 "Install it with: pip install anthropic"
             )
 
-        self.api_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
-        if not self.api_key:
+        self.model_name = model or self.DEFAULT_CLAUDE_MODEL
+        resolved_key = api_key or os.environ.get("ANTHROPIC_API_KEY")
+        if not resolved_key:
             raise ValueError(
                 "Anthropic API key not found. Set ANTHROPIC_API_KEY or pass api_key."
             )
+        self._claude_client = anthropic.Anthropic(api_key=resolved_key)
 
-        self.model = model
-        self.client = anthropic.Anthropic(api_key=self.api_key)
-        self.logger = logging.getLogger(__name__)
-
-        context_path = Path(__file__).parent / "context.md"
-        self._context = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
+    # ── Public API ────────────────────────────────────────────────
 
     def summarize(self, transcript_md: str) -> str:
         """
@@ -72,17 +111,54 @@ class MeetingSummarizer:
         Returns:
           Meeting notes as Markdown string.
         """
-        self.logger.info(f"Calling Claude ({self.model}) to generate meeting notes")
+        system_prompt = (
+            (self._context + "\n\n" + self.SYSTEM_PROMPT).strip()
+            if self._context
+            else self.SYSTEM_PROMPT
+        )
 
-        system_prompt = (self._context + "\n\n" + self.SYSTEM_PROMPT).strip() if self._context else self.SYSTEM_PROMPT
+        if self.backend == "mlx":
+            return self._summarize_mlx(system_prompt, transcript_md)
+        else:
+            return self._summarize_claude(system_prompt, transcript_md)
 
-        message = self.client.messages.create(
-            model=self.model,
-            max_tokens=4096,
+    # ── Private: MLX backend ──────────────────────────────────────
+
+    def _summarize_mlx(self, system_prompt: str, transcript_md: str) -> str:
+        self.logger.info(f"Generating notes with local model ({self.model_name})")
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": transcript_md},
+        ]
+
+        prompt = self._mlx_tokenizer.apply_chat_template(
+            messages, tokenize=False, add_generation_prompt=True
+        )
+
+        notes = self._mlx_generate(
+            self._mlx_model,
+            self._mlx_tokenizer,
+            prompt=prompt,
+            max_tokens=self.max_tokens,
+            verbose=False,
+        )
+
+        self.logger.info("Meeting notes generated successfully (local)")
+        return notes
+
+    # ── Private: Claude backend ───────────────────────────────────
+
+    def _summarize_claude(self, system_prompt: str, transcript_md: str) -> str:
+        self.logger.info(f"Calling Claude ({self.model_name}) to generate meeting notes")
+
+        message = self._claude_client.messages.create(
+            model=self.model_name,
+            max_tokens=self.max_tokens,
             system=system_prompt,
             messages=[{"role": "user", "content": transcript_md}],
         )
 
         notes = message.content[0].text
-        self.logger.info("Meeting notes generated successfully")
+        self.logger.info("Meeting notes generated successfully (Claude)")
         return notes

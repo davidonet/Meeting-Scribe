@@ -45,6 +45,7 @@ class MeetingScribe:
         language: str = None,
         whisper_model: str = "base",
         summarize: bool = False,
+        summarize_backend: str = "mlx",
         publish_anytype: bool = False,
     ):
         """
@@ -53,7 +54,8 @@ class MeetingScribe:
           output_folder – where transcript.json and .md will be created
           language      – ISO-639-1 code to force ASR language (None=auto)
           whisper_model      – one of ["tiny","base","small","medium","large-v3"]
-          summarize          – generate meeting notes via Claude
+          summarize          – generate meeting notes
+          summarize_backend  – "mlx" for local model, "claude" for Anthropic API
           publish_anytype    – publish notes to Anytype
         """
         self.video_path = video_path
@@ -61,6 +63,7 @@ class MeetingScribe:
         self.language = language
         self.whisper_model = whisper_model
         self.summarize = summarize
+        self.summarize_backend = summarize_backend
         self.publish_anytype = publish_anytype
         self.logger = logging.getLogger(__name__)
         
@@ -289,13 +292,13 @@ class MeetingScribe:
         Returns:
           The generated meeting notes as a Markdown string.
         """
-        self.logger.info("Step 6: Generating meeting notes with Claude")
+        self.logger.info(f"Step 6: Generating meeting notes ({self.summarize_backend})")
 
         try:
             with open(self.transcript_md, "r", encoding="utf-8") as f:
                 transcript_text = f.read()
 
-            summarizer = MeetingSummarizer()
+            summarizer = MeetingSummarizer(backend=self.summarize_backend)
             notes = summarizer.summarize(transcript_text)
 
             with open(self.summary_md, "w", encoding="utf-8") as f:
@@ -375,7 +378,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--summarize",
         action="store_true",
-        help="Generate meeting notes using Claude (requires ANTHROPIC_API_KEY)"
+        help="Generate meeting notes from the transcript"
+    )
+
+    parser.add_argument(
+        "--backend",
+        default="mlx",
+        choices=["mlx", "claude"],
+        help="Summarization backend: 'mlx' for local model (default), 'claude' for Anthropic API"
     )
 
     parser.add_argument(
@@ -402,6 +412,7 @@ def main() -> int:
             language=args.lang,
             whisper_model=args.model,
             summarize=args.summarize,
+            summarize_backend=args.backend,
             publish_anytype=args.anytype,
         )
         
