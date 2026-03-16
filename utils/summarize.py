@@ -18,7 +18,7 @@ class MeetingSummarizer:
       - "claude" : Anthropic API (requires ANTHROPIC_API_KEY)
     """
 
-    DEFAULT_MLX_MODEL = "mlx-community/Qwen2.5-14B-Instruct-4bit"
+    DEFAULT_MLX_MODEL = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
     DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 
     SYSTEM_PROMPT = (
@@ -34,12 +34,15 @@ class MeetingSummarizer:
         "Write in the same language as the transcript."
     )
 
+    LANGUAGE_INSTRUCTION = "Always write the meeting notes in {language}, regardless of the transcript language."
+
     def __init__(
         self,
         backend: str = "mlx",
         model: Optional[str] = None,
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
+        language: Optional[str] = "French",
     ):
         """
         Args:
@@ -47,9 +50,11 @@ class MeetingSummarizer:
           model      – model identifier (defaults per backend if None)
           api_key    – Anthropic API key (only needed for "claude" backend)
           max_tokens – maximum tokens to generate
+          language   – force output language (e.g. "French"); None to auto-detect from transcript
         """
         self.backend = backend
         self.max_tokens = max_tokens
+        self.language = language
         self.logger = logging.getLogger(__name__)
 
         # Load context.md (domain knowledge for the system prompt)
@@ -111,11 +116,10 @@ class MeetingSummarizer:
         Returns:
           Meeting notes as Markdown string.
         """
-        system_prompt = (
-            (self._context + "\n\n" + self.SYSTEM_PROMPT).strip()
-            if self._context
-            else self.SYSTEM_PROMPT
-        )
+        base = (self._context + "\n\n" + self.SYSTEM_PROMPT).strip() if self._context else self.SYSTEM_PROMPT
+        if self.language:
+            base = base + "\n" + self.LANGUAGE_INSTRUCTION.format(language=self.language)
+        system_prompt = base
 
         if self.backend == "mlx":
             return self._summarize_mlx(system_prompt, transcript_md)

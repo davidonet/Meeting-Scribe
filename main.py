@@ -286,8 +286,11 @@ class MeetingScribe:
 
     def _summarize(self) -> str:
         """
-        Read the exported Markdown transcript and generate meeting notes
-        via Claude (Sonnet 4.6).
+        Read the exported Markdown transcript and generate meeting notes.
+
+        For the MLX backend, runs in a fresh subprocess so that Whisper's
+        Metal GPU memory is fully released before the larger summarization
+        model is loaded.
 
         Returns:
           The generated meeting notes as a Markdown string.
@@ -295,6 +298,9 @@ class MeetingScribe:
         self.logger.info(f"Step 6: Generating meeting notes ({self.summarize_backend})")
 
         try:
+            if self.summarize_backend == "mlx":
+                return self._summarize_mlx_subprocess()
+
             with open(self.transcript_md, "r", encoding="utf-8") as f:
                 transcript_text = f.read()
 
@@ -309,6 +315,39 @@ class MeetingScribe:
         except Exception as e:
             self.logger.error(f"Summarization failed: {str(e)}")
             raise RuntimeError(f"Summarization failed: {str(e)}")
+
+    def _summarize_mlx_subprocess(self) -> str:
+        """
+        Spawn a fresh Python process for MLX summarization.
+
+        Whisper's model weights remain referenced in mlx_whisper's internal
+        lru_cache for the lifetime of the process — mx.clear_cache() cannot
+        reclaim that memory. A subprocess starts with a clean Metal heap, so
+        the Llama model can load without competing with Whisper.
+        """
+        import subprocess
+
+        project_root = os.path.dirname(os.path.abspath(__file__))
+        script = (
+            f"import sys; sys.path.insert(0, {repr(project_root)})\n"
+            f"from utils.summarize import MeetingSummarizer\n"
+            f"with open({repr(self.transcript_md)}, encoding='utf-8') as f:\n"
+            f"    text = f.read()\n"
+            f"s = MeetingSummarizer(backend='mlx')\n"
+            f"notes = s.summarize(text)\n"
+            f"with open({repr(self.summary_md)}, 'w', encoding='utf-8') as f:\n"
+            f"    f.write(notes)\n"
+        )
+
+        self.logger.info("Launching subprocess for MLX summarization (releases Whisper GPU memory)")
+        result = subprocess.run([sys.executable, "-c", script])
+
+        if result.returncode != 0:
+            raise RuntimeError(f"MLX summarization subprocess failed (exit code {result.returncode})")
+
+        self.logger.info(f"Meeting notes saved to {self.summary_md}")
+        with open(self.summary_md, "r", encoding="utf-8") as f:
+            return f.read()
 
     def _publish_anytype(self, notes: Optional[str] = None) -> None:
         """
