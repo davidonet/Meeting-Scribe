@@ -51,23 +51,38 @@ results/
 └── meeting_notes.md     # AI-generated meeting notes
 ```
 
+### Environment Variables
+
+API keys can be set via a `.env` file at the project root (loaded automatically via `python-dotenv`):
+
+```bash
+# .env
+ANTHROPIC_API_KEY=sk-ant-...    # Required for --backend claude
+GROQ_API_KEY=gsk_...            # Required for --backend groq
+ANYTYPE_KEY=...                 # Required for --anytype
+```
+
 ---
 
 ## Usage
 
 ```bash
-python main.py [-h] [--output OUTPUT] [--lang LANG] [--model MODEL] [--verbose] [--summarize] [--backend {mlx,claude}] [--anytype] VIDEO_PATH
+python main.py [-h] [--output OUTPUT] [--lang LANG] [--model MODEL] [--verbose]
+               [--summarize] [--summarize-only] [--backend {mlx,claude,groq}]
+               [--context CONTEXT] [--anytype] [VIDEO_PATH]
 ```
 
 | Argument | Default | Description |
 |----------|---------|-------------|
-| `VIDEO_PATH` | *(required)* | Path to input video or audio (`.mp4`, `.mkv`, `.mov`, `.m4a`, …) |
+| `VIDEO_PATH` | *(required)* | Path to input video or audio (`.mp4`, `.mkv`, `.mov`, `.m4a`, …). Not required with `--summarize-only`. |
 | `--output`, `-o` | `results/` | Output folder for transcript files |
 | `--lang` | auto-detect | ISO-639-1 language code (e.g. `en`, `fr`, `es`) |
 | `--model` | `base` | Whisper model size (see table below) |
 | `--verbose`, `-v` | off | Enable debug logging |
 | `--summarize` | off | Generate meeting notes (local MLX model by default) |
-| `--backend` | `mlx` | Summarization backend: `mlx` (local, Apple Silicon) or `claude` (Anthropic API, requires `ANTHROPIC_API_KEY`) |
+| `--summarize-only` | off | Skip transcription, only regenerate meeting notes from existing `transcript.md` |
+| `--backend` | `mlx` | Summarization backend: `mlx` (local, Apple Silicon), `claude` (Anthropic API) or `groq` (Groq API) |
+| `--context` | `contexts/default.md` | Path to a context `.md` file providing domain knowledge for summarization |
 | `--anytype` | off | Publish notes to Anytype (requires `ANYTYPE_KEY`) |
 
 ### Whisper Models
@@ -94,6 +109,12 @@ python main.py meeting.mp4 --summarize
 # Generate meeting notes with Claude API
 python main.py meeting.mp4 --summarize --backend claude
 
+# Use a domain-specific context file for better summaries
+python main.py meeting.mp4 --summarize --backend claude --context contexts/welqin.md
+
+# Regenerate meeting notes without re-transcribing
+python main.py --summarize-only --backend claude --context contexts/affinity.md
+
 # Full pipeline: transcribe + summarize + publish to Anytype
 python main.py meeting.mp4 --summarize --anytype
 
@@ -110,13 +131,17 @@ Meeting-Scribe/
 ├── main.py              # orchestrates the end-to-end pipeline
 ├── processing/
 │   ├── audio.py         # audio extraction (ffmpeg)
-│   ├── transcribe.py    # Whisper wrapper
+│   ├── transcribe.py    # MLX Whisper / Groq wrapper
 │   ├── diarize.py       # custom speaker diarization
 │   └── merge.py         # align speakers + text
 ├── utils/
 │   ├── markdown.py      # export helpers
-│   ├── summarize.py     # Claude meeting notes generator
+│   ├── summarize.py     # meeting notes generator (MLX / Claude / Groq)
 │   └── anytype.py       # Anytype publisher
+├── contexts/            # domain-specific context files for summarization
+│   ├── default.md       # generic context (loaded when no --context is given)
+│   ├── welqin.md        # Welqin IP platform vocabulary
+│   └── affinity.md      # Affinity (Serif) PAO training
 ├── config/
 │   └── requirements.txt
 ├── scripts/

@@ -9,13 +9,15 @@ This document provides comprehensive guidance for AI assistants (like Claude) wo
 **MeetingScribe** is an open-source Python application that converts meeting videos into speaker-labelled transcripts using local, privacy-preserving AI models.
 
 **Key Features:**
-- High-quality multilingual transcription (OpenAI Whisper)
+- High-quality multilingual transcription (MLX Whisper on Apple Silicon, or Groq API)
 - Automatic speaker diarization (custom implementation)
 - Markdown export with timestamps
+- AI-powered meeting notes generation (MLX local, Claude API, or Groq API)
+- Domain-specific context files for tailored summaries
+- Environment variables via `.env` file (python-dotenv)
 - One-command CLI interface
-- Fully offline, no cloud dependencies
 
-**Use Case:** Drop a meeting video (`.mp4`, `.mkv`, `.mov`) into the CLI and receive a clean, speaker-segmented transcript in Markdown format.
+**Use Case:** Drop a meeting video (`.mp4`, `.mkv`, `.mov`) into the CLI and receive a clean, speaker-segmented transcript in Markdown format, with optional AI-generated meeting notes.
 
 ---
 
@@ -24,16 +26,23 @@ This document provides comprehensive guidance for AI assistants (like Claude) wo
 ```
 Meeting-Scribe/
 ├── main.py                      # Pipeline orchestrator (entry point)
+├── .env                         # API keys (gitignored, loaded by python-dotenv)
 ├── processing/                  # Core processing modules
 │   ├── audio.py                # Audio extraction via FFmpeg
-│   ├── transcribe.py           # Whisper ASR wrapper
+│   ├── transcribe.py           # MLX Whisper / Groq ASR wrapper
 │   ├── diarize.py              # Custom speaker diarization
 │   └── merge.py                # Alignment of transcript + speakers
 ├── utils/
-│   └── markdown.py             # Markdown/JSON export utilities
+│   ├── markdown.py             # Markdown/JSON export utilities
+│   ├── summarize.py            # Meeting notes generator (MLX / Claude / Groq)
+│   └── anytype.py              # Anytype publisher
+├── contexts/                    # Domain-specific context files for summarization
+│   ├── default.md              # Generic context (loaded when no --context given)
+│   ├── welqin.md               # Welqin IP platform vocabulary
+│   └── affinity.md             # Affinity (Serif) PAO training
 ├── scripts/                     # Setup and testing scripts
 │   ├── setup.py                # Automated installation script
-│   ├── whisper_install.py      # Python 3.13 Whisper installer
+│   ├── whisper_install.py      # Python 3.13+ Whisper installer
 │   └── test_components.py      # Component testing suite
 ├── config/
 │   └── requirements.txt        # Python dependencies
@@ -43,6 +52,7 @@ Meeting-Scribe/
 ├── results/                     # Output folder (gitignored)
 │   ├── transcript.md           # Human-readable transcript
 │   ├── transcript.json         # Raw structured data
+│   ├── meeting_notes.md        # AI-generated meeting notes
 │   └── audio.wav               # Extracted audio
 ├── README.md                    # User-facing documentation
 ├── .gitignore                   # Git exclusions
@@ -55,16 +65,19 @@ Meeting-Scribe/
 |------|---------|----------------|
 | `main.py` | Pipeline orchestrator; coordinates all processing steps | When adding new pipeline stages or CLI options |
 | `processing/audio.py` | FFmpeg wrapper for video→audio extraction | When changing audio preprocessing (sample rate, channels) |
-| `processing/transcribe.py` | Whisper ASR interface | When updating Whisper models or adding transcription options |
+| `processing/transcribe.py` | MLX Whisper / Groq ASR interface | When updating Whisper models or adding transcription options |
 | `processing/diarize.py` | Custom speaker diarization using MFCC+clustering | When improving speaker detection algorithms |
 | `processing/merge.py` | Aligns transcript segments with speaker turns | When adjusting overlap/gap tolerances |
 | `utils/markdown.py` | Exports results to Markdown/JSON | When changing output format or adding metadata |
+| `utils/summarize.py` | Meeting notes generation (MLX / Claude / Groq) | When changing summarization prompts or adding backends |
+| `utils/anytype.py` | Anytype publishing | When changing publish format or Anytype integration |
+| `contexts/*.md` | Domain-specific context files for summarization | When adding new meeting types or updating terminology |
 
 ---
 
 ## Architecture & Pipeline
 
-### Processing Pipeline (5 Steps)
+### Processing Pipeline (7 Steps)
 
 ```
 video.mp4
@@ -73,14 +86,13 @@ video.mp4
 ┌─────────────────────┐
 │ 1. Audio Extraction │  → audio.py: ffmpeg → 16kHz mono WAV
 └──────────┬──────────┘
-           ▼
-┌─────────────────────┐
-│ 2. Transcription    │  → transcribe.py: Whisper → timestamped text segments
-└──────────┬──────────┘
-           ▼
-┌─────────────────────┐
-│ 3. Diarization      │  → diarize.py: MFCC features + clustering → speaker turns
-└──────────┬──────────┘
+           │
+     ┌─────┴─────┐        (steps 2 & 3 run in parallel)
+     ▼           ▼
+┌──────────┐ ┌──────────┐
+│ 2. ASR   │ │ 3. Diar. │  → transcribe.py + diarize.py
+└────┬─────┘ └────┬─────┘
+     └─────┬──────┘
            ▼
 ┌─────────────────────┐
 │ 4. Merge            │  → merge.py: align text + speakers by timestamp overlap
@@ -88,7 +100,17 @@ video.mp4
            ▼
 ┌─────────────────────┐
 │ 5. Export           │  → markdown.py: write transcript.md and transcript.json
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐  (optional --summarize)
+│ 6. Summarize        │  → summarize.py + contexts/*.md → meeting_notes.md
+└──────────┬──────────┘
+           ▼
+┌─────────────────────┐  (optional --anytype)
+│ 7. Publish          │  → anytype.py → Anytype object
 └─────────────────────┘
+
+--summarize-only mode skips steps 1-5, jumps directly to step 6.
 ```
 
 ### Component Responsibilities
@@ -100,13 +122,12 @@ video.mp4
 - **Key Method:** `extract(video_path, target_wav, sample_rate=16000, mono=True)`
 - **Error Handling:** Checks FFmpeg availability, validates input file exists
 
-#### 2. `WhisperTranscriber` (transcribe.py)
+#### 2. `WhisperTranscriber` / `GroqTranscriber` (transcribe.py)
 - **Input:** WAV file path
 - **Output:** Dict with `text` (full transcript) and `segments` (timestamped chunks)
-- **Models:** tiny, base, small, medium, large-v3
-- **Device:** CPU or CUDA
+- **Backends:** MLX Whisper (Apple Silicon, default) or Groq API (`--transcription-backend groq`)
+- **MLX Models:** tiny, base, small, medium, large-v2, large-v3, large-v3-turbo (mapped to `mlx-community/whisper-*-mlx` repos)
 - **Key Method:** `transcribe(wav_path, output_json=False)`
-- **Lazy Loading:** Model loads on first use to save memory
 
 #### 3. `SpeakerDiarizer` (diarize.py)
 - **Input:** WAV file path
@@ -186,11 +207,17 @@ python main.py meeting.mp4 --lang es --model medium --output results/
 ```
 
 **CLI Arguments:**
-- `video_path` (required): Path to input video
+- `video_path` (optional with `--summarize-only`): Path to input video
 - `--output`, `-o`: Output folder (default: `results/`)
 - `--lang`: ISO-639-1 language code (default: auto-detect)
 - `--model`: Whisper model size (default: `base`)
+- `--transcription-backend`: `mlx` (default) or `groq`
 - `--verbose`, `-v`: Enable debug logging
+- `--summarize`: Generate meeting notes after transcription
+- `--summarize-only`: Skip steps 1-5, regenerate notes from existing `transcript.md`
+- `--backend`: Summarization backend: `mlx`, `claude`, or `groq`
+- `--context`: Path to a context `.md` file (default: `contexts/default.md`)
+- `--anytype`: Publish notes to Anytype
 
 ### Testing Components
 
@@ -271,14 +298,16 @@ if whisper_model not in valid_models:
 ### Dependencies
 **Core:**
 - `ffmpeg-python`, `moviepy`, `pydub`: Media processing
-- `torch`, `torchaudio`: Deep learning framework
-- `whisper`: OpenAI Whisper ASR (installed from local source)
+- `mlx-whisper`: MLX Whisper ASR (Apple Silicon native)
 - `librosa`, `soundfile`: Audio analysis
 - `scikit-learn`: Clustering algorithms
 - `numpy`, `scipy`: Numerical computing
+- `python-dotenv`: Environment variables from `.env` file
 
 **Optional:**
-- CUDA-enabled PyTorch for GPU acceleration
+- `anthropic`: Claude API backend for summarization
+- `mlx-lm`: Local LLM summarization (Apple Silicon)
+- `groq`: Groq API backend for transcription/summarization
 
 ### Audio Processing Specs
 - **Sample Rate:** 16 kHz (optimal for Whisper)
@@ -372,8 +401,7 @@ if whisper_model not in valid_models:
 1. **No real-time processing:** Batch-only (entire video must be processed)
 2. **Limited speaker identification:** Labels are generic (SPEAKER_00, SPEAKER_01)
 3. **No video analysis:** Key-frame extraction planned for v0.2
-4. **Single-threaded:** No parallel processing (future optimization)
-5. **Memory usage:** Large videos may require significant RAM
+4. **Memory usage:** Large videos may require significant RAM (transcription and diarization run in parallel)
 
 ### Python 3.13 Compatibility
 - **Issue:** Whisper's `pyproject.toml` has dynamic versioning incompatible with Python 3.13
@@ -492,7 +520,8 @@ Follow conventional commits:
 - `results/`: Output folder (user-generated)
 - `*.mp4`, `*.mkv`: Video files (too large)
 - `whisper_src/`: Local Whisper source
-- `.env`: Environment variables (secrets)
+- `.env`: Environment variables (API keys — never commit)
+- `.DS_Store`: macOS metadata
 - `.vscode/`, `.idea/`: IDE configs
 
 ---
@@ -534,14 +563,17 @@ Follow conventional commits:
 
 | Task | File | Line/Method |
 |------|------|-------------|
-| CLI argument parsing | `main.py` | Line 262-299 |
+| CLI argument parsing | `main.py` | `parse_args()` |
 | Pipeline orchestration | `main.py` | `MeetingScribe.run()` |
-| FFmpeg command building | `processing/audio.py` | Line 79-95 |
-| Whisper model loading | `processing/transcribe.py` | `_load_model()` |
+| FFmpeg command building | `processing/audio.py` | `AudioExtractor.extract()` |
+| MLX Whisper model map | `processing/transcribe.py` | `WhisperTranscriber.MODEL_MAP` |
 | VAD algorithm | `processing/diarize.py` | `_detect_speech()` |
 | Speaker clustering | `processing/diarize.py` | `_cluster_speakers()` |
 | Segment overlap calculation | `processing/merge.py` | `_compute_overlap()` |
 | Markdown formatting | `utils/markdown.py` | `export_markdown()` |
+| Summarization prompts | `utils/summarize.py` | `MeetingSummarizer.SYSTEM_PROMPT` |
+| Context file loading | `utils/summarize.py` | `MeetingSummarizer.__init__()` |
+| Domain context files | `contexts/` | `default.md`, `welqin.md`, `affinity.md` |
 
 ---
 
@@ -571,9 +603,10 @@ Follow conventional commits:
 | Version | Date | Changes |
 |---------|------|---------|
 | 0.1 | 2024 | Initial release with transcription + diarization |
-| Current | 2025-11-14 | Added CLAUDE.md documentation |
+| 0.1.1 | 2025-11-14 | Added CLAUDE.md documentation |
+| 0.1.2 | 2026-03-18 | MLX Whisper model fix, `.env` support, `--context` and `--summarize-only` flags, `contexts/` folder |
 
 ---
 
-*Last updated: 2025-11-14*
+*Last updated: 2026-03-18*
 *Maintained by: MeetingScribe Team*
