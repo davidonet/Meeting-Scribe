@@ -15,6 +15,7 @@ torchaudio>=2.0.0                  # PyTorch audio functionality
 
 # ASR (Automatic Speech Recognition)
 mlx-whisper>=0.4.0                 # MLX-based Whisper (native Apple Silicon GPU acceleration)
+openai-whisper>=20230918           # OpenAI Whisper (CPU/CUDA, works on Intel Macs)
 
 # Audio analysis and speaker diarization
 librosa>=0.10.0                    # Audio analysis tools

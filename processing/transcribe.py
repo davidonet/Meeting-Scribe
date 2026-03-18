@@ -9,7 +9,104 @@ import logging
 import time
 from typing import Dict, Any
 
-import mlx_whisper
+try:
+    import mlx_whisper
+except ImportError:
+    mlx_whisper = None
+
+
+class WhisperCPUTranscriber:
+    """
+    Transcribes speech using OpenAI Whisper (CPU/CUDA).
+    Works on any platform including Intel Macs.
+    """
+
+    VALID_MODELS = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
+
+    def __init__(
+        self,
+        model_size: str = "base",
+        device: str = None,
+        language: str = None,
+        verbose: bool = False,
+    ):
+        try:
+            import whisper
+        except ImportError:
+            raise ImportError(
+                "openai-whisper package is required for CPU transcription. "
+                "Install it with: pip install openai-whisper"
+            )
+
+        if model_size not in self.VALID_MODELS:
+            logging.getLogger(__name__).warning(
+                f"Invalid model size: {model_size}. Using 'base' instead."
+            )
+            model_size = "base"
+
+        self.model_size = model_size
+        self.language = language
+        self.verbose = verbose
+        self.device = device or "cpu"
+        self.logger = logging.getLogger(__name__)
+        self._whisper = whisper
+        self._model = None
+
+        if verbose:
+            self.logger.setLevel(logging.DEBUG)
+        else:
+            self.logger.setLevel(logging.INFO)
+
+    def _load_model(self):
+        if self._model is None:
+            self.logger.info(f"Loading Whisper model '{self.model_size}' on {self.device}")
+            self._model = self._whisper.load_model(self.model_size, device=self.device)
+        return self._model
+
+    def transcribe(self, wav_path: str, output_json: bool = False) -> Dict[str, Any]:
+        if not os.path.isfile(wav_path):
+            raise FileNotFoundError(f"Input WAV file not found: {wav_path}")
+
+        self.logger.info(f"Starting transcription of {wav_path}")
+        self.logger.info(f"Using model: {self.model_size} (CPU Whisper)")
+
+        model = self._load_model()
+
+        transcribe_options = {}
+        if self.language:
+            transcribe_options["language"] = self.language
+
+        start_time = time.time()
+
+        try:
+            result = model.transcribe(
+                wav_path,
+                verbose=self.verbose,
+                **transcribe_options,
+            )
+
+            elapsed = time.time() - start_time
+            self.logger.info(f"Transcription completed in {elapsed:.2f} seconds")
+
+            if output_json:
+                json_path = os.path.splitext(wav_path)[0] + "_transcript.json"
+                self._save_json(result, json_path)
+
+            return result
+
+        except Exception as e:
+            self.logger.error(f"Transcription failed: {str(e)}")
+            raise RuntimeError(f"Whisper CPU transcription failed: {str(e)}")
+
+    def _save_json(self, result: Dict[str, Any], json_path: str) -> None:
+        try:
+            os.makedirs(os.path.dirname(os.path.abspath(json_path)), exist_ok=True)
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(result, f, ensure_ascii=False, indent=2)
+            self.logger.info(f"Saved transcript JSON to {json_path}")
+        except Exception as e:
+            self.logger.error(f"Failed to save JSON output: {str(e)}")
+
 
 class WhisperTranscriber:
     """

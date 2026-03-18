@@ -14,7 +14,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple
 
 from processing.audio import AudioExtractor
-from processing.transcribe import WhisperTranscriber, GroqTranscriber
+from processing.transcribe import WhisperTranscriber, WhisperCPUTranscriber, GroqTranscriber
 from processing.diarize import SpeakerDiarizer
 from processing.merge import SegmentMerger
 from utils.markdown import MarkdownExporter
@@ -216,6 +216,13 @@ class MeetingScribe:
                     language=self.language,
                 )
                 transcript = transcriber.transcribe(self.ogg_path)
+            elif self.transcription_backend == "whisper":
+                transcriber = WhisperCPUTranscriber(
+                    model_size=self.whisper_model,
+                    language=self.language,
+                    verbose=True,
+                )
+                transcript = transcriber.transcribe(wav_path)
             else:
                 transcriber = WhisperTranscriber(
                     model_size=self.whisper_model,
@@ -462,12 +469,15 @@ def parse_args() -> argparse.Namespace:
         help="Whisper model size"
     )
     
+    import platform
+    default_transcription = "mlx" if platform.machine() == "arm64" else "whisper"
+
     parser.add_argument(
         "--transcription-backend",
-        default="mlx",
-        choices=["mlx", "groq"],
+        default=default_transcription,
+        choices=["mlx", "whisper", "groq"],
         dest="transcription_backend",
-        help="Transcription backend: 'mlx' for local Apple Silicon (default), 'groq' for Groq Whisper API"
+        help="Transcription backend: 'mlx' for Apple Silicon (default on arm64), 'whisper' for OpenAI Whisper CPU (default on Intel), 'groq' for Groq API"
     )
 
     parser.add_argument(
