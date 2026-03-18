@@ -85,3 +85,4 @@ results/
 
 # Others
 whisper_src/
+.DS_Store
