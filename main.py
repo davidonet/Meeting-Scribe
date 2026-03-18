@@ -50,6 +50,7 @@ class MeetingScribe:
         whisper_model: str = "base",
         transcription_backend: str = "mlx",
         summarize: bool = False,
+        summarize_only: bool = False,
         summarize_backend: str = "mlx",
         context_file: Optional[str] = None,
         publish_anytype: bool = False,
@@ -73,7 +74,8 @@ class MeetingScribe:
         self.language = language
         self.whisper_model = whisper_model
         self.transcription_backend = transcription_backend
-        self.summarize = summarize
+        self.summarize = summarize or summarize_only
+        self.summarize_only = summarize_only
         self.summarize_backend = summarize_backend
         self.context_file = context_file
         self.publish_anytype = publish_anytype
@@ -94,14 +96,16 @@ class MeetingScribe:
         self.transcript_md = os.path.join(self.output_folder, "transcript.md")
         self.summary_md = os.path.join(self.output_folder, "meeting_notes.md")
         
-        # Validate video path
-        if not os.path.isfile(video_path):
-            raise FileNotFoundError(f"Video file not found: {video_path}")
-            
-        # Validate model name
-        valid_models = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
-        if whisper_model not in valid_models:
-            raise ValueError(f"Invalid model: {whisper_model}. Must be one of {valid_models}")
+        # Validate inputs
+        if self.summarize_only:
+            if not os.path.isfile(self.transcript_md):
+                raise FileNotFoundError(f"Transcript not found: {self.transcript_md}. Run full pipeline first.")
+        else:
+            if not os.path.isfile(video_path):
+                raise FileNotFoundError(f"Video file not found: {video_path}")
+            valid_models = ["tiny", "base", "small", "medium", "large-v2", "large-v3", "large-v3-turbo"]
+            if whisper_model not in valid_models:
+                raise ValueError(f"Invalid model: {whisper_model}. Must be one of {valid_models}")
 
     def run(self) -> None:
         """
@@ -115,27 +119,33 @@ class MeetingScribe:
         self.logger.info(f"Output folder: {self.output_folder}")
 
         try:
-            # Step 1: Extract audio from video
-            wav_path = self._extract_audio()
-
-            # Steps 2 & 3: Transcribe and diarize in parallel
-            self.logger.info("Steps 2 & 3: Transcribing and diarizing in parallel")
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_transcript = executor.submit(self._transcribe, wav_path)
-                future_diarization = executor.submit(self._diarize, wav_path)
-                transcript = future_transcript.result()
-                diarization = future_diarization.result()
-            
-            # Step 4: Merge transcript and speaker info
-            merged = self._merge(transcript, diarization)
-            
-            # Step 5: Export results to Markdown and JSON
-            self._export(merged)
-
-            # Step 6: Summarize with Claude (optional)
             notes = None
-            if self.summarize:
+
+            if self.summarize_only:
+                # Skip steps 1-5, jump straight to summarization
+                self.logger.info(f"Summarize-only mode: using existing {self.transcript_md}")
                 notes = self._summarize()
+            else:
+                # Step 1: Extract audio from video
+                wav_path = self._extract_audio()
+
+                # Steps 2 & 3: Transcribe and diarize in parallel
+                self.logger.info("Steps 2 & 3: Transcribing and diarizing in parallel")
+                with ThreadPoolExecutor(max_workers=2) as executor:
+                    future_transcript = executor.submit(self._transcribe, wav_path)
+                    future_diarization = executor.submit(self._diarize, wav_path)
+                    transcript = future_transcript.result()
+                    diarization = future_diarization.result()
+
+                # Step 4: Merge transcript and speaker info
+                merged = self._merge(transcript, diarization)
+
+                # Step 5: Export results to Markdown and JSON
+                self._export(merged)
+
+                # Step 6: Summarize with Claude (optional)
+                if self.summarize:
+                    notes = self._summarize()
 
             # Step 7: Publish to Anytype (optional)
             if self.publish_anytype:
@@ -428,7 +438,9 @@ def parse_args() -> argparse.Namespace:
     
     parser.add_argument(
         "video_path",
-        help="Path to input video file (.mp4, .mkv, .mov)"
+        nargs="?",
+        default=None,
+        help="Path to input video file (.mp4, .mkv, .mov). Not required with --summarize-only."
     )
     
     parser.add_argument(
@@ -471,6 +483,13 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--summarize-only",
+        action="store_true",
+        dest="summarize_only",
+        help="Skip transcription, only regenerate meeting notes from existing transcript.md"
+    )
+
+    parser.add_argument(
         "--backend",
         default="mlx",
         choices=["mlx", "claude", "groq"],
@@ -506,7 +525,11 @@ def main() -> int:
     # Set logging level based on verbosity
     if args.verbose:
         logging.getLogger().setLevel(logging.DEBUG)
-    
+
+    if not args.summarize_only and not args.video_path:
+        print("Error: video_path is required unless --summarize-only is used.")
+        return 1
+
     try:
         scribe = MeetingScribe(
             video_path=args.video_path,
@@ -515,6 +538,7 @@ def main() -> int:
             whisper_model=args.model,
             transcription_backend=args.transcription_backend,
             summarize=args.summarize,
+            summarize_only=args.summarize_only,
             summarize_backend=args.backend,
             context_file=args.context,
             publish_anytype=args.anytype,
