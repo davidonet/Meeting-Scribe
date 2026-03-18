@@ -44,22 +44,27 @@ class MeetingSummarizer:
         api_key: Optional[str] = None,
         max_tokens: int = 4096,
         language: Optional[str] = "French",
+        context_file: Optional[str] = None,
     ):
         """
         Args:
-          backend    – "mlx" for local inference, "claude" for Anthropic API
-          model      – model identifier (defaults per backend if None)
-          api_key    – Anthropic API key (only needed for "claude" backend)
-          max_tokens – maximum tokens to generate
-          language   – force output language (e.g. "French"); None to auto-detect from transcript
+          backend      – "mlx" for local inference, "claude" for Anthropic API
+          model        – model identifier (defaults per backend if None)
+          api_key      – Anthropic API key (only needed for "claude" backend)
+          max_tokens   – maximum tokens to generate
+          language     – force output language (e.g. "French"); None to auto-detect from transcript
+          context_file – path to a context .md file (default: utils/context.md)
         """
         self.backend = backend
         self.max_tokens = max_tokens
         self.language = language
         self.logger = logging.getLogger(__name__)
 
-        # Load context.md (domain knowledge for the system prompt)
-        context_path = Path(__file__).parent / "context.md"
+        # Load context file (domain knowledge for the system prompt)
+        if context_file:
+            context_path = Path(context_file)
+        else:
+            context_path = Path(__file__).parent / "context.md"
         self._context = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
 
         if backend == "mlx":

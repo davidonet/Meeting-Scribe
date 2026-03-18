@@ -51,6 +51,7 @@ class MeetingScribe:
         transcription_backend: str = "mlx",
         summarize: bool = False,
         summarize_backend: str = "mlx",
+        context_file: Optional[str] = None,
         publish_anytype: bool = False,
         anytype_space: Optional[str] = None,
     ):
@@ -63,6 +64,7 @@ class MeetingScribe:
           transcription_backend  – "mlx" for local MLX Whisper, "groq" for Groq API
           summarize              – generate meeting notes
           summarize_backend      – "mlx" for local model, "claude" for Anthropic API
+          context_file           – path to a context .md file for summarization (default: utils/context.md)
           publish_anytype        – publish notes to Anytype
           anytype_space          – Anytype space ID (overrides ANYTYPE_SPACE env var)
         """
@@ -73,6 +75,7 @@ class MeetingScribe:
         self.transcription_backend = transcription_backend
         self.summarize = summarize
         self.summarize_backend = summarize_backend
+        self.context_file = context_file
         self.publish_anytype = publish_anytype
         self.anytype_space = anytype_space
         self.logger = logging.getLogger(__name__)
@@ -342,7 +345,7 @@ class MeetingScribe:
             with open(self.transcript_md, "r", encoding="utf-8") as f:
                 transcript_text = f.read()
 
-            summarizer = MeetingSummarizer(backend=self.summarize_backend)
+            summarizer = MeetingSummarizer(backend=self.summarize_backend, context_file=self.context_file)
             notes = summarizer.summarize(transcript_text)
 
             with open(self.summary_md, "w", encoding="utf-8") as f:
@@ -366,12 +369,13 @@ class MeetingScribe:
         import subprocess
 
         project_root = os.path.dirname(os.path.abspath(__file__))
+        context_arg = f", context_file={repr(self.context_file)}" if self.context_file else ""
         script = (
             f"import sys; sys.path.insert(0, {repr(project_root)})\n"
             f"from utils.summarize import MeetingSummarizer\n"
             f"with open({repr(self.transcript_md)}, encoding='utf-8') as f:\n"
             f"    text = f.read()\n"
-            f"s = MeetingSummarizer(backend='mlx')\n"
+            f"s = MeetingSummarizer(backend='mlx'{context_arg})\n"
             f"notes = s.summarize(text)\n"
             f"with open({repr(self.summary_md)}, 'w', encoding='utf-8') as f:\n"
             f"    f.write(notes)\n"
@@ -474,6 +478,12 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--context",
+        default=None,
+        help="Path to a context .md file for summarization (default: utils/context.md)"
+    )
+
+    parser.add_argument(
         "--anytype",
         action="store_true",
         help="Publish notes to Anytype (requires ANYTYPE_KEY)"
@@ -506,6 +516,7 @@ def main() -> int:
             transcription_backend=args.transcription_backend,
             summarize=args.summarize,
             summarize_backend=args.backend,
+            context_file=args.context,
             publish_anytype=args.anytype,
             anytype_space=args.anytype_space,
         )
