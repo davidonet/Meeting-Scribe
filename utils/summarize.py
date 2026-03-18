@@ -53,7 +53,7 @@ class MeetingSummarizer:
           api_key      – Anthropic API key (only needed for "claude" backend)
           max_tokens   – maximum tokens to generate
           language     – force output language (e.g. "French"); None to auto-detect from transcript
-          context_file – path to a context .md file (default: utils/context.md)
+          context_file – path to a context .md file (default: contexts/default.md)
         """
         self.backend = backend
         self.max_tokens = max_tokens
@@ -64,7 +64,7 @@ class MeetingSummarizer:
         if context_file:
             context_path = Path(context_file)
         else:
-            context_path = Path(__file__).parent / "context.md"
+            context_path = Path(__file__).parent.parent / "contexts" / "default.md"
         self._context = context_path.read_text(encoding="utf-8") if context_path.exists() else ""
 
         if backend == "mlx":

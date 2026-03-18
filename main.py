@@ -65,7 +65,7 @@ class MeetingScribe:
           transcription_backend  – "mlx" for local MLX Whisper, "groq" for Groq API
           summarize              – generate meeting notes
           summarize_backend      – "mlx" for local model, "claude" for Anthropic API
-          context_file           – path to a context .md file for summarization (default: utils/context.md)
+          context_file           – path to a context .md file for summarization (default: contexts/default.md)
           publish_anytype        – publish notes to Anytype
           anytype_space          – Anytype space ID (overrides ANYTYPE_SPACE env var)
         """
@@ -499,7 +499,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--context",
         default=None,
-        help="Path to a context .md file for summarization (default: utils/context.md)"
+        help="Path to a context .md file for summarization (default: contexts/default.md)"
     )
 
     parser.add_argument(
