@@ -7,6 +7,9 @@ import os
 import sys
 import argparse
 import logging
+
+from dotenv import load_dotenv
+load_dotenv()
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple
 
