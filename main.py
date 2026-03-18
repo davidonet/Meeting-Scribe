@@ -7,10 +7,11 @@ import os
 import sys
 import argparse
 import logging
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Any, Optional, Tuple
 
 from processing.audio import AudioExtractor
-from processing.transcribe import WhisperTranscriber
+from processing.transcribe import WhisperTranscriber, GroqTranscriber
 from processing.diarize import SpeakerDiarizer
 from processing.merge import SegmentMerger
 from utils.markdown import MarkdownExporter
@@ -44,27 +45,33 @@ class MeetingScribe:
         output_folder: str = "results/",
         language: str = None,
         whisper_model: str = "base",
+        transcription_backend: str = "mlx",
         summarize: bool = False,
         summarize_backend: str = "mlx",
         publish_anytype: bool = False,
+        anytype_space: Optional[str] = None,
     ):
         """
         Args:
           video_path    – path to input video file (.mp4/.mkv/.mov)
           output_folder – where transcript.json and .md will be created
           language      – ISO-639-1 code to force ASR language (None=auto)
-          whisper_model      – one of ["tiny","base","small","medium","large-v3"]
-          summarize          – generate meeting notes
-          summarize_backend  – "mlx" for local model, "claude" for Anthropic API
-          publish_anytype    – publish notes to Anytype
+          whisper_model          – one of ["tiny","base","small","medium","large-v3","large-v3-turbo"]
+          transcription_backend  – "mlx" for local MLX Whisper, "groq" for Groq API
+          summarize              – generate meeting notes
+          summarize_backend      – "mlx" for local model, "claude" for Anthropic API
+          publish_anytype        – publish notes to Anytype
+          anytype_space          – Anytype space ID (overrides ANYTYPE_SPACE env var)
         """
         self.video_path = video_path
         self.output_folder = output_folder
         self.language = language
         self.whisper_model = whisper_model
+        self.transcription_backend = transcription_backend
         self.summarize = summarize
         self.summarize_backend = summarize_backend
         self.publish_anytype = publish_anytype
+        self.anytype_space = anytype_space
         self.logger = logging.getLogger(__name__)
         
         # Ensure output folder ends with a slash for path consistency
@@ -76,6 +83,7 @@ class MeetingScribe:
         
         # Set paths for outputs
         self.audio_path = os.path.join(self.output_folder, "audio.wav")
+        self.ogg_path = os.path.join(self.output_folder, "audio.ogg")
         self.transcript_json = os.path.join(self.output_folder, "transcript.json")
         self.transcript_md = os.path.join(self.output_folder, "transcript.md")
         self.summary_md = os.path.join(self.output_folder, "meeting_notes.md")
@@ -91,22 +99,26 @@ class MeetingScribe:
 
     def run(self) -> None:
         """
-        Execute full pipeline in sequence.
+        Execute full pipeline.
+        Steps 2 (transcription) and 3 (diarization) run in parallel —
+        transcription uses GPU/Groq API while diarization uses CPU,
+        so they don't contend for the same resource.
         Raises exception on any step failure.
         """
         self.logger.info(f"Starting MeetingScribe pipeline for {self.video_path}")
         self.logger.info(f"Output folder: {self.output_folder}")
-        self.logger.info("Using MLX (Apple Silicon GPU acceleration)")
-        
+
         try:
             # Step 1: Extract audio from video
             wav_path = self._extract_audio()
-            
-            # Step 2: Transcribe audio to text
-            transcript = self._transcribe(wav_path)
-            
-            # Step 3: Diarize speakers in audio
-            diarization = self._diarize(wav_path)
+
+            # Steps 2 & 3: Transcribe and diarize in parallel
+            self.logger.info("Steps 2 & 3: Transcribing and diarizing in parallel")
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_transcript = executor.submit(self._transcribe, wav_path)
+                future_diarization = executor.submit(self._diarize, wav_path)
+                transcript = future_transcript.result()
+                diarization = future_diarization.result()
             
             # Step 4: Merge transcript and speaker info
             merged = self._merge(transcript, diarization)
@@ -133,21 +145,36 @@ class MeetingScribe:
 
     def _extract_audio(self) -> str:
         """
+        Extracts audio from the video.
+        - Always produces a WAV file (needed for diarization).
+        - Also produces an OGG/Opus file when using the Groq transcription backend.
+
         Returns:
           path to extracted .wav file (16 kHz, mono)
         """
         self.logger.info("Step 1: Extracting audio from video")
-        
+
         try:
             extractor = AudioExtractor()
             wav_path = extractor.extract(
                 video_path=self.video_path,
                 target_wav=self.audio_path,
-                sample_rate=16000,  # 16kHz for optimal ASR
-                mono=True           # Single channel for diarization
+                sample_rate=16000,
+                mono=True,
             )
-            
-            self.logger.info(f"Audio extracted to {wav_path}")
+            self.logger.info(f"WAV audio extracted to {wav_path}")
+
+            if self.transcription_backend == "groq":
+                if os.path.splitext(self.video_path)[1].lower() == ".ogg":
+                    self.logger.info("Input is already OGG — skipping conversion")
+                    self.ogg_path = self.video_path
+                else:
+                    extractor.extract_ogg(
+                        video_path=self.video_path,
+                        target_ogg=self.ogg_path,
+                        sample_rate=16000,
+                    )
+
             return wav_path
         except Exception as e:
             self.logger.error(f"Audio extraction failed: {str(e)}")
@@ -156,31 +183,39 @@ class MeetingScribe:
     def _transcribe(self, wav_path: str) -> Dict[str, Any]:
         """
         Args:
-          wav_path – path to .wav file from _extract_audio()
+          wav_path – path to .wav file from _extract_audio() (used for MLX)
         Returns:
           Whisper transcript dict with segments & timestamps
         """
         self.logger.info("Step 2: Transcribing audio with Whisper")
-        self.logger.info(f"Using model: {self.whisper_model}, language: {self.language or 'auto-detect'}")
-        
+        self.logger.info(
+            f"Backend: {self.transcription_backend}, model: {self.whisper_model}, "
+            f"language: {self.language or 'auto-detect'}"
+        )
+
         try:
-            transcriber = WhisperTranscriber(
-                model_size=self.whisper_model,
-                language=self.language,
-                verbose=True
-            )
-            
-            transcript = transcriber.transcribe(wav_path)
-            
+            if self.transcription_backend == "groq":
+                transcriber = GroqTranscriber(
+                    model_size=self.whisper_model,
+                    language=self.language,
+                )
+                transcript = transcriber.transcribe(self.ogg_path)
+            else:
+                transcriber = WhisperTranscriber(
+                    model_size=self.whisper_model,
+                    language=self.language,
+                    verbose=True,
+                )
+                transcript = transcriber.transcribe(wav_path)
+
             segment_count = len(transcript.get("segments", []))
             self.logger.info(f"Transcription complete with {segment_count} segments")
-            
-            # Get some basic stats about the transcript
+
             if segment_count > 0:
                 total_duration = transcript["segments"][-1]["end"]
                 total_words = len(transcript["text"].split())
                 self.logger.info(f"Total duration: {total_duration:.2f}s, Word count: {total_words}")
-            
+
             return transcript
         except Exception as e:
             self.logger.error(f"Transcription failed: {str(e)}")
@@ -368,7 +403,7 @@ class MeetingScribe:
             video_name = os.path.splitext(os.path.basename(self.video_path))[0]
             title = f"Meeting Notes — {video_name}"
 
-            publisher = AnytypePublisher()
+            publisher = AnytypePublisher(space_id=self.anytype_space)
             object_id = publisher.publish(title, notes)
 
             self.logger.info(f"Published to Anytype (object: {object_id})")
@@ -409,6 +444,14 @@ def parse_args() -> argparse.Namespace:
     )
     
     parser.add_argument(
+        "--transcription-backend",
+        default="mlx",
+        choices=["mlx", "groq"],
+        dest="transcription_backend",
+        help="Transcription backend: 'mlx' for local Apple Silicon (default), 'groq' for Groq Whisper API"
+    )
+
+    parser.add_argument(
         "--verbose", "-v",
         action="store_true",
         help="Enable verbose logging"
@@ -423,14 +466,21 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--backend",
         default="mlx",
-        choices=["mlx", "claude"],
-        help="Summarization backend: 'mlx' for local model (default), 'claude' for Anthropic API"
+        choices=["mlx", "claude", "groq"],
+        help="Summarization backend: 'mlx' for local model (default), 'claude' for Anthropic API, 'groq' for Groq API (Mistral)"
     )
 
     parser.add_argument(
         "--anytype",
         action="store_true",
         help="Publish notes to Anytype (requires ANYTYPE_KEY)"
+    )
+
+    parser.add_argument(
+        "--anytype-space",
+        default=None,
+        dest="anytype_space",
+        help="Anytype space ID (overrides ANYTYPE_SPACE env var)"
     )
 
     return parser.parse_args()
@@ -450,9 +500,11 @@ def main() -> int:
             output_folder=args.output,
             language=args.lang,
             whisper_model=args.model,
+            transcription_backend=args.transcription_backend,
             summarize=args.summarize,
             summarize_backend=args.backend,
             publish_anytype=args.anytype,
+            anytype_space=args.anytype_space,
         )
         
         scribe.run()

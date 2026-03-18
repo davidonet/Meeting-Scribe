@@ -118,7 +118,71 @@ class AudioExtractor:
             
             self.logger.info(f"Successfully extracted audio to {target_wav}")
             return target_wav
-            
+
         except Exception as e:
             self.logger.error(f"Error during audio extraction: {str(e)}")
             raise RuntimeError(f"Error during audio extraction: {str(e)}")
+
+    def extract_ogg(
+        self,
+        video_path: str,
+        target_ogg: str,
+        sample_rate: int = 16000,
+    ) -> str:
+        """
+        Extract audio as Opus/OGG at 24 kbps mono — optimal for Groq API upload.
+        ~10x smaller than WAV at the same sample rate.
+
+        Args:
+          video_path  – input video file
+          target_ogg  – output path for .ogg
+          sample_rate – sample rate (default: 16000)
+
+        Returns:
+          path to the generated OGG file
+
+        Raises:
+          FileNotFoundError if video_path is missing
+          RuntimeError on ffmpeg failure
+        """
+        if not os.path.isfile(video_path):
+            raise FileNotFoundError(f"Input video file not found: {video_path}")
+
+        if not self._check_ffmpeg_available():
+            raise RuntimeError(f"ffmpeg not found or not executable at: {self.ffmpeg_path}")
+
+        os.makedirs(os.path.dirname(os.path.abspath(target_ogg)), exist_ok=True)
+
+        cmd = [
+            self.ffmpeg_path,
+            "-i", video_path,
+            "-vn",
+            "-ar", str(sample_rate),
+            "-ac", "1",           # mono
+            "-c:a", "libopus",    # Opus codec — best speech compression
+            "-b:a", "24k",        # 24 kbps is sufficient for speech clarity
+            "-y",
+            target_ogg,
+        ]
+
+        self.logger.info(f"Extracting OGG audio: {video_path} -> {target_ogg}")
+        self.logger.debug(f"Running ffmpeg command: {' '.join(cmd)}")
+
+        try:
+            process = subprocess.run(cmd, capture_output=True, text=True, check=False)
+
+            if process.returncode != 0:
+                error_msg = process.stderr or "No error details available"
+                self.logger.error(f"ffmpeg OGG failed (code {process.returncode}): {error_msg}")
+                raise RuntimeError(f"ffmpeg OGG conversion failed: {error_msg}")
+
+            if not os.path.isfile(target_ogg):
+                raise RuntimeError(f"ffmpeg did not create output file: {target_ogg}")
+
+            size_mb = os.path.getsize(target_ogg) / (1024 * 1024)
+            self.logger.info(f"OGG audio extracted to {target_ogg} ({size_mb:.1f} MB)")
+            return target_ogg
+
+        except Exception as e:
+            self.logger.error(f"Error during OGG extraction: {str(e)}")
+            raise RuntimeError(f"Error during OGG extraction: {str(e)}")

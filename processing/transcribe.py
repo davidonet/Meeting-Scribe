@@ -134,3 +134,124 @@ class WhisperTranscriber:
             self.logger.info(f"Saved transcript JSON to {json_path}")
         except Exception as e:
             self.logger.error(f"Failed to save JSON output: {str(e)}")
+
+
+class GroqTranscriber:
+    """
+    Transcribes speech using the Groq Whisper API.
+    Accepts OGG/Opus audio for minimal upload size and fast cloud inference.
+    """
+
+    # Maps local model names → Groq model IDs
+    GROQ_MODEL_MAP = {
+        "tiny":           "whisper-large-v3-turbo",
+        "base":           "whisper-large-v3-turbo",
+        "small":          "whisper-large-v3-turbo",
+        "medium":         "whisper-large-v3",
+        "large-v2":       "whisper-large-v3",
+        "large-v3":       "whisper-large-v3",
+        "large-v3-turbo": "whisper-large-v3-turbo",
+    }
+
+    # Groq free-tier upload limit
+    FREE_TIER_LIMIT_MB = 25
+
+    def __init__(
+        self,
+        model_size: str = "large-v3-turbo",
+        language: str = None,
+        api_key: str = None,
+    ):
+        """
+        Args:
+          model_size – maps to a Groq Whisper model (see GROQ_MODEL_MAP)
+          language   – ISO-639-1 code, or None for auto-detect
+          api_key    – Groq API key; falls back to GROQ_API_KEY env var
+        """
+        import os
+
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError(
+                "groq package is required for Groq transcription. "
+                "Install it with: pip install groq"
+            )
+
+        self.model_name = self.GROQ_MODEL_MAP.get(model_size, "whisper-large-v3-turbo")
+        self.language = language
+        self.logger = logging.getLogger(__name__)
+
+        resolved_key = api_key or os.environ.get("GROQ_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Groq API key not found. Set the GROQ_API_KEY environment variable or pass api_key."
+            )
+        self._client = Groq(api_key=resolved_key)
+
+    def transcribe(self, audio_path: str) -> Dict[str, Any]:
+        """
+        Send audio to Groq Whisper and return timestamped segments.
+
+        Args:
+          audio_path – path to OGG/Opus (or any Groq-supported format)
+
+        Returns:
+          Same dict format as WhisperTranscriber:
+            {"text": "...", "segments": [{"id", "start", "end", "text"}, ...]}
+
+        Raises:
+          FileNotFoundError if audio_path missing
+          RuntimeError on API error
+        """
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+        size_mb = os.path.getsize(audio_path) / (1024 * 1024)
+        if size_mb > self.FREE_TIER_LIMIT_MB:
+            self.logger.warning(
+                f"Audio file is {size_mb:.1f} MB — exceeds {self.FREE_TIER_LIMIT_MB} MB "
+                "free-tier limit. Upload may fail; consider chunking."
+            )
+
+        self.logger.info(f"Transcribing with Groq ({self.model_name}): {audio_path} ({size_mb:.1f} MB)")
+
+        start_time = time.time()
+        try:
+            with open(audio_path, "rb") as f:
+                kwargs = dict(
+                    file=(os.path.basename(audio_path), f, "audio/ogg"),
+                    model=self.model_name,
+                    response_format="verbose_json",
+                    timestamp_granularities=["segment"],
+                )
+                if self.language:
+                    kwargs["language"] = self.language
+
+                response = self._client.audio.transcriptions.create(**kwargs)
+
+            elapsed = time.time() - start_time
+            self.logger.info(f"Groq transcription completed in {elapsed:.2f}s")
+
+            raw_segments = response.segments or []
+            # Groq may return dicts or objects depending on the SDK version
+            def _get(seg, key):
+                return seg[key] if isinstance(seg, dict) else getattr(seg, key)
+
+            segments = [
+                {
+                    "id": i,
+                    "start": _get(seg, "start"),
+                    "end": _get(seg, "end"),
+                    "text": _get(seg, "text").strip(),
+                }
+                for i, seg in enumerate(raw_segments)
+            ]
+
+            return {"text": response.text, "segments": segments}
+
+        except Exception as e:
+            self.logger.error(f"Groq transcription failed: {str(e)}")
+            raise RuntimeError(f"Groq transcription failed: {str(e)}")
+
+

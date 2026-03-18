@@ -33,6 +33,7 @@ rich>=13.3.5                       # Rich text and formatting in terminal
 python-dotenv>=1.0.0               # Environment variable loading
 requests>=2.31.0                   # HTTP client (Anytype API)
 anthropic>=0.40.0                  # Anthropic Claude SDK (meeting summary)
+groq>=0.12.0                       # Groq API SDK (fast Mistral inference)
 
 # Optional: for GPU acceleration (comment out if not using CUDA)
 # torch>=2.0.0+cu118               # Replace the CPU torch with this for CUDA 11.8

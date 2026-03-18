@@ -13,25 +13,26 @@ class MeetingSummarizer:
     """
     Produces structured meeting notes from a raw transcript.
 
-    Supports two backends:
+    Supports three backends:
       - "mlx"    : local inference via mlx-lm (Apple Silicon, default)
       - "claude" : Anthropic API (requires ANTHROPIC_API_KEY)
+      - "groq"   : Groq API (requires GROQ_API_KEY)
     """
 
     DEFAULT_MLX_MODEL = "mlx-community/Meta-Llama-3.1-8B-Instruct-4bit"
     DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+    DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b"
 
     SYSTEM_PROMPT = (
         "You are a professional meeting-notes assistant.\n"
         "Given a raw speaker-labelled transcript, produce concise meeting notes "
         "in Markdown with the following sections:\n"
-        "1. **Participants** – list of speakers identified\n"
+        "1. **Participants** – list of speakers identified (David, Yannick, Marc, Adrien, Victoria, Keith are Welqin personnel, other attendees are external IPFirm or PTO representatives)\n"
         "2. **Summary** – 3-5 sentence overview\n"
         "3. **Key Discussion Points** – bullet list\n"
         "4. **Decisions Made** – bullet list (if any)\n"
-        "5. **Action Items** – bullet list with owner when identifiable\n\n"
+        "5. **Action Items** – checkboxes\n\n"
         "Be factual. Do not invent information absent from the transcript. "
-        "Write in the same language as the transcript."
     )
 
     LANGUAGE_INSTRUCTION = "Always write the meeting notes in {language}, regardless of the transcript language."
@@ -65,8 +66,10 @@ class MeetingSummarizer:
             self._init_mlx(model)
         elif backend == "claude":
             self._init_claude(model, api_key)
+        elif backend == "groq":
+            self._init_groq(model, api_key)
         else:
-            raise ValueError(f"Unknown backend: {backend!r}. Use 'mlx' or 'claude'.")
+            raise ValueError(f"Unknown backend: {backend!r}. Use 'mlx', 'claude', or 'groq'.")
 
     # ── Backend initialisation ────────────────────────────────────
 
@@ -104,6 +107,25 @@ class MeetingSummarizer:
             )
         self._claude_client = anthropic.Anthropic(api_key=resolved_key)
 
+    def _init_groq(self, model: Optional[str], api_key: Optional[str]) -> None:
+        import os
+
+        try:
+            from groq import Groq
+        except ImportError:
+            raise ImportError(
+                "The 'groq' package is required for the Groq backend. "
+                "Install it with: pip install groq"
+            )
+
+        self.model_name = model or self.DEFAULT_GROQ_MODEL
+        resolved_key = api_key or os.environ.get("GROQ_API_KEY")
+        if not resolved_key:
+            raise ValueError(
+                "Groq API key not found. Set GROQ_API_KEY or pass api_key."
+            )
+        self._groq_client = Groq(api_key=resolved_key)
+
     # ── Public API ────────────────────────────────────────────────
 
     def summarize(self, transcript_md: str) -> str:
@@ -123,6 +145,8 @@ class MeetingSummarizer:
 
         if self.backend == "mlx":
             return self._summarize_mlx(system_prompt, transcript_md)
+        elif self.backend == "groq":
+            return self._summarize_groq(system_prompt, transcript_md)
         else:
             return self._summarize_claude(system_prompt, transcript_md)
 
@@ -165,4 +189,22 @@ class MeetingSummarizer:
 
         notes = message.content[0].text
         self.logger.info("Meeting notes generated successfully (Claude)")
+        return notes
+
+    # ── Private: Groq backend ──────────────────────────────────────
+
+    def _summarize_groq(self, system_prompt: str, transcript_md: str) -> str:
+        self.logger.info(f"Calling Groq ({self.model_name}) to generate meeting notes")
+
+        response = self._groq_client.chat.completions.create(
+            model=self.model_name,
+            max_tokens=self.max_tokens,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": transcript_md},
+            ],
+        )
+
+        notes = response.choices[0].message.content
+        self.logger.info("Meeting notes generated successfully (Groq)")
         return notes
