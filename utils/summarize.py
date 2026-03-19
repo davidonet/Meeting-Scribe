@@ -27,7 +27,7 @@ class MeetingSummarizer:
         "You are a professional meeting-notes assistant.\n"
         "Given a raw speaker-labelled transcript, produce concise meeting notes "
         "in Markdown with the following sections:\n"
-        "1. **Participants** – list of speakers identified (David, Yannick, Marc, Adrien, Victoria, Keith are Welqin personnel, other attendees are external IPFirm or PTO representatives)\n"
+        "1. **Participants** – list of speakers identified\n"
         "2. **Summary** – 3-5 sentence overview\n"
         "3. **Key Discussion Points** – bullet list\n"
         "4. **Decisions Made** – bullet list (if any)\n"

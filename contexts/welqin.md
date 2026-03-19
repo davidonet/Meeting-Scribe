@@ -4,6 +4,16 @@ Welqin est une plateforme B2B de gestion de transactions de propriété intellec
 
 ---
 
+## Interlocuteurs
+
+Les réunions impliquent généralement les interlocuteurs suivants :
+- **David, Yannick, Marc, Adrien, Victoria, Keith** : membres de l'équipe Welqin
+- Des représentants de cabinet d'avocats ou de conseil en PI (IP Firms)
+- Des représentants d'offices nationaux ou régionaux de PI (PTOs)
+- Des représentants d'éditeurs de logiciels de gestion de PI
+
+---
+
 ## Acteurs et rôles
 
 | Terme | Définition |
@@ -19,8 +29,3 @@ Welqin est une plateforme B2B de gestion de transactions de propriété intellec
 | **Service Provider** | Prestataire (traduction, recherche, formalités…) |
 | **Cooperation** | Relation B2B formalisée entre deux agents sur Welqin |
 
----
-
-## Équipe Welqin
-
-David, Yannick, Marc, Adrien, Victoria, Keith sont des membres de l'équipe Welqin. Les autres participants sont généralement des représentants externes (IP Firm, PTO, clients).
