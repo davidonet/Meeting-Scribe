@@ -14,7 +14,6 @@
 | **File input** | Pass any audio/video file (`.mp4`, `.mkv`, `.mov`, `.ogg`, `.m4a`, …) |
 | **Meeting notes** | Structured Markdown notes (participants, summary, decisions, action items) via local MLX model, Claude, or Groq |
 | **Context files** | Feed domain-specific vocabulary/instructions to the summarizer for better notes |
-| **Anytype publishing** | One flag to push notes straight into your Anytype space |
 | **Summarize-only mode** | Re-generate notes from an existing transcript without re-transcribing |
 | **Fully offline option** | MLX transcription + MLX summarization — zero data leaves your machine |
 
@@ -63,8 +62,6 @@ Create a `.env` file at the project root — it is loaded automatically:
 # .env
 ANTHROPIC_API_KEY=sk-ant-...   # --backend claude
 GROQ_API_KEY=gsk_...           # --transcription-backend groq  /  --backend groq
-ANYTYPE_KEY=...                # --anytype
-ANYTYPE_SPACE=...              # target space (alternative to --anytype-space)
 ```
 
 ---
@@ -88,8 +85,6 @@ python main.py [VIDEO_PATH] [OPTIONS]
 | `--summarize-only` | off | Skip transcription; regenerate notes from an existing `transcript.md` |
 | `--backend` | `mlx` | Summarization backend: `mlx` · `claude` · `groq` |
 | `--context` | `contexts/default.md` | Path to a domain context `.md` file (appended to the summarizer system prompt) |
-| `--anytype` | off | Publish notes to Anytype |
-| `--anytype-space` | env / auto | Anytype space ID. Falls back to `ANYTYPE_SPACE` env var, then auto-detects first space. |
 | `--verbose`, `-v` | off | Debug-level logging |
 
 ### Whisper Models
@@ -128,10 +123,6 @@ python main.py meeting.mp4 --summarize --backend claude \
 # Re-generate notes without re-transcribing
 python main.py --summarize-only --backend claude
 
-# Publish to a specific Anytype space
-python main.py meeting.mp4 --summarize --anytype \
-  --anytype-space "your-space-id"
-
 # Custom output folder + verbose logging
 python main.py meeting.mp4 --output ~/transcripts/ --verbose
 ```
@@ -143,14 +134,17 @@ python main.py meeting.mp4 --output ~/transcripts/ --verbose
 `transcribe.sh` is a shell script that **records from your microphone** (or a system audio capture device) and pipes the result straight into the pipeline.
 
 ```bash
-# Record a new meeting
+# Record a new meeting (output goes to results/)
 ./transcribe.sh
 
-# Or use an existing file (skips recording)
+# Use an existing file (skips recording)
 ./transcribe.sh path/to/recording.ogg
+
+# Specify a custom output folder
+./transcribe.sh path/to/recording.ogg ~/transcripts/my-meeting/
 ```
 
-The script activates the virtual environment, records (if no file is given), runs the full pipeline, then cleans up the temporary recording.
+The script activates the virtual environment, records from the microphone if no file is given, runs the full pipeline, then cleans up the temporary recording. The second argument sets the output folder (default: `results/`).
 
 ### Capturing Full Meeting Audio with BlackHole
 
@@ -276,9 +270,6 @@ Costs depend on transcript length (~130 words/min average, plus ~1 500 token out
          │  6. Summarize    │  MLX / Claude / Groq → meeting_notes.md
          └────────┬─────────┘
                   ▼
-         ┌──────────────────┐  (--anytype)
-         │  7. Publish      │  Anytype local HTTP API
-         └──────────────────┘
 ```
 
 Steps 2 and 3 run **in parallel** — MLX/Groq uses the GPU or network while diarization runs on CPU — cutting total runtime roughly in half.
@@ -296,7 +287,6 @@ Steps 2 and 3 run **in parallel** — MLX/Groq uses the GPU or network while dia
 | **Media extraction** | [ffmpeg](https://ffmpeg.org/) | Battle-tested, handles every format |
 | **Summarization — local** | [mlx-lm](https://github.com/ml-explore/mlx-examples) / Llama 3.1 8B | Fully offline, Apple Silicon GPU |
 | **Summarization — cloud** | Claude Sonnet / Groq Mistral | Best quality when privacy allows |
-| **Publishing** | [Anytype](https://anytype.io/) local HTTP API | Local-first note management |
 
 ### Model Selection & Privacy/Performance Trade-offs
 
@@ -337,8 +327,7 @@ Meeting-Scribe/
 │   └── merge.py             # Align transcript + speaker turns
 ├── utils/
 │   ├── markdown.py          # Markdown / JSON export
-│   ├── summarize.py         # Meeting notes (MLX / Claude / Groq)
-│   └── anytype.py           # Anytype publisher
+│   └── summarize.py         # Meeting notes (MLX / Claude / Groq)
 ├── contexts/                # Domain context files for summarization
 │   └── default.md
 ├── config/
